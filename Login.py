@@ -13,7 +13,7 @@ if "logged_in" not in st.session_state or not st.session_state.get("logged_in"):
 def safe_name(s: str) -> str:
     s = re.sub(r"[^0-9a-zA-Z.-]", "", (s or "guest"))
     s = re.sub(r"[^0-9a-zA-Z.-]", "", s).strip()
-    
+    return s.lower()
 
 USERNAME = safe_name(st.session_state.get("username", "guest"))
 first_name = st.session_state.get("first_name", "Guest")
