@@ -1,3 +1,7 @@
+
+
+
+
 """
 NotebookLM-style Audit Tool with Templates (enhanced)
 - Multi-project with file management (create, delete, remove files)
@@ -85,6 +89,9 @@ if "last_findings" not in st.session_state:
     st.session_state.last_findings = {}
 if "last_narrative" not in st.session_state:
     st.session_state.last_narrative = ""
+if "openai_client" not in st.session_state:
+    st.session_state.openai_client = None
+
 
 # ---------------- Utilities ----------------
 def safe_name(name: str, max_len: int = 120) -> str:
@@ -213,6 +220,7 @@ def get_previous_analyses(proj: str, limit: int = 5) -> List[Dict[str, str]]:
         return []
 
 
+
 # ---------------- Export Functions ----------------
 def export_to_json(findings: Dict, narrative: str = "") -> str:
     """Export findings and narrative to JSON"""
@@ -251,6 +259,7 @@ def export_to_excel(findings: Dict, narrative: str = "") -> bytes:
             pd.DataFrame([table_findings]).to_excel(writer, sheet_name=sheet_name, index=False)
     
     return output.getvalue()
+
 
 def generate_pdf_report(findings: Dict, narrative: str = "", project_name: str = "") -> bytes:
     """Generate PDF report"""
@@ -293,6 +302,42 @@ def generate_pdf_report(findings: Dict, narrative: str = "", project_name: str =
     
     doc.build(story)
     return output.getvalue()
+
+
+# ---------------- Persistent Analysis History ----------------
+def append_to_analysis_history(proj: str, question: str, findings: dict, narrative: str):
+    """Append result to JSON file for future trend analysis (NotebookLM-style memory)"""
+    hist_path = os.path.join(project_path(proj), "analysis_history.json")
+
+    # Load existing
+    if os.path.exists(hist_path):
+        with open(hist_path, "r", encoding="utf-8") as f:
+            history = json.load(f)
+    else:
+        history = []
+
+    # Append new entry
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "question": question,
+        "findings": findings,
+        "narrative": narrative
+    }
+    history.append(entry)
+
+    # Save back
+    with open(hist_path, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
+
+def load_analysis_history(proj: str) -> List[dict]:
+    """Load all stored analysis history"""
+    hist_path = os.path.join(project_path(proj), "analysis_history.json")
+    if os.path.exists(hist_path):
+        with open(hist_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
 
 # ---------------- Join Analysis ----------------
 def detect_join_keys(df1: pd.DataFrame, df2: pd.DataFrame) -> List[str]:
@@ -371,6 +416,7 @@ def get_openai_client():
     # Lebih aman pakai .get() agar tidak error kalau key belum ada
     api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
     
+
     if not api_key:
         return None
 
@@ -386,7 +432,6 @@ def get_openai_client():
 
 if "openai_client" not in st.session_state:
     st.session_state.openai_client = get_openai_client()
-
 
 
 # ---------------- File readers ----------------
@@ -882,6 +927,15 @@ def main_ui():
                 st.write(ai_text)
                 st.session_state.last_narrative = ai_text
 
+                # 🔹 Save analysis result for trend tracking
+                append_to_analysis_history(
+                    proj,
+                    f"Single Table Analysis: {name}",
+                    fnd,
+                    ai_text
+                )
+
+
             st.session_state.last_findings = {name: fnd}
 
     elif len(chosen) == 2:
@@ -972,6 +1026,15 @@ def main_ui():
             st.write(ai_text)
             st.session_state.last_narrative = ai_text
 
+            # 🔹 Save analysis result for trend tracking
+            append_to_analysis_history(
+                proj,
+                f"Join Analysis: {chosen[0]} vs {chosen[1]} on {key1}-{key2}",
+                join_analysis,
+                ai_text
+            )
+
+
     elif len(chosen) > 2:
         st.markdown("### 🔍 Multi-File Analysis")
         # 🔹 AI-driven relationship finding
@@ -1010,7 +1073,35 @@ def main_ui():
                 use_container_width=True
             )
 
-    # Ask AI section
+    # ---------------- Load Past Analyses ----------------
+    st.markdown("---")
+    st.subheader("📘 Reuse Previous Analyses (NotebookLM-style)")
+
+    past_analyses = load_analysis_history(proj)
+    if not past_analyses:
+        st.info("No prior analyses saved yet. Run one to generate and store results.")
+    else:
+        st.success(f"{len(past_analyses)} past analyses found.")
+        selected_idx = st.selectbox(
+            "Select past analysis to view or reuse:",
+            options=list(range(len(past_analyses))),
+            format_func=lambda i: f"{i+1}. {past_analyses[i]['question']} ({past_analyses[i]['timestamp'][:16]})"
+        )
+
+        sel = past_analyses[selected_idx]
+        st.markdown(f"### 🧾 {sel['question']}")
+        st.write(sel["narrative"])
+
+        with st.expander("📊 Findings JSON"):
+            st.json(sel["findings"])
+
+        # Option to reuse as context
+        if st.button("📎 Reuse this result for new analysis context"):
+            st.session_state["last_findings"] = sel["findings"]
+            st.session_state["last_narrative"] = sel["narrative"]
+            st.info("✅ Loaded this analysis as context for the next question.")
+
+
     # Ask AI section
     st.markdown("---")
     st.subheader("💬 Ask Kelly")
